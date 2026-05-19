@@ -30,21 +30,20 @@ const (
 
 	DefaultOAuthClientID     = "936475272427.apps.googleusercontent.com"
 	DefaultOAuthClientSecret = "KWsJlkaMn1jGLxQpWxMnOox-"
-	OAuthRedirectURI         = "http://localhost:8855/callback"
-	OAuthTokenURL            = "https://www.googleapis.com/oauth2/v4/token"
-	OAuthAuthURL             = "https://accounts.google.com/o/oauth2/auth"
-	OAuthScope               = "openid email profile"
-
-	DynamiteIssueTokenURL = "https://oauthaccountmanager.googleapis.com/v1/issuetoken"
+	OAuthRedirectURI = "http://localhost:8855/callback"
+	OAuthAuthURL     = "https://accounts.google.com/o/oauth2/auth"
+	OAuthScope       = "openid email profile"
 	DynamiteClientID      = "576267593750-sbi1m7khesgfh1e0f2nv5vqlfa4qr72m.apps.googleusercontent.com"
 	DynamiteAppID         = "com.google.Dynamite"
 	DynamiteScopes        = "https://www.googleapis.com/auth/dynamite https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/mobiledevicemanagement https://www.googleapis.com/auth/notifications https://www.googleapis.com/auth/supportcontent https://www.googleapis.com/auth/chat.integration https://www.googleapis.com/auth/peopleapi.readonly"
 )
 
-// Mutable OAuth credentials — can be overridden with custom client ID.
+// Mutable auth settings — can be overridden for custom clients or testing.
 var (
-	OAuthClientID     = DefaultOAuthClientID
-	OAuthClientSecret = DefaultOAuthClientSecret
+	OAuthClientID         = DefaultOAuthClientID
+	OAuthClientSecret     = DefaultOAuthClientSecret
+	OAuthTokenURL         = "https://www.googleapis.com/oauth2/v4/token"
+	DynamiteIssueTokenURL = "https://oauthaccountmanager.googleapis.com/v1/issuetoken"
 )
 
 // SetOAuthCredentials overrides the default OAuth client credentials.
