@@ -335,7 +335,9 @@ func loadSession() (auth.Session, error) {
 
 // conversationsCmd lists conversations.
 func conversationsCmd() *cobra.Command {
-	return &cobra.Command{
+	var limit int
+
+	cmd := &cobra.Command{
 		Use:     "conversations",
 		Aliases: []string{"convos", "ls"},
 		Short:   "List conversations",
@@ -355,6 +357,10 @@ func conversationsCmd() *cobra.Command {
 			convos := make([]model.Conversation, 0, len(resp.GetWorldItems()))
 			for _, item := range resp.GetWorldItems() {
 				convos = append(convos, model.ConversationFromWorldItem(item))
+			}
+
+			if limit > 0 && limit < len(convos) {
+				convos = convos[:limit]
 			}
 
 			if jsonOutput {
@@ -380,11 +386,16 @@ func conversationsCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().IntVarP(&limit, "limit", "n", 0, "max number of conversations to show (0 = all)")
+	return cmd
 }
 
 // messagesCmd fetches message history for a conversation.
 func messagesCmd() *cobra.Command {
-	return &cobra.Command{
+	var limit int
+	var since string
+
+	cmd := &cobra.Command{
 		Use:   "messages <conversation_id>",
 		Short: "Read messages from a conversation",
 		Args:  cobra.ExactArgs(1),
@@ -403,6 +414,14 @@ func messagesCmd() *cobra.Command {
 			chatAPI := api.New(client)
 
 			fromTS := int64(0)
+			if since != "" {
+				dur, err := time.ParseDuration(since)
+				if err != nil {
+					return fmt.Errorf("invalid --since duration (e.g. 24h, 7d): %w", err)
+				}
+				fromTS = time.Now().Add(-dur).UnixMicro()
+			}
+
 			resp, err := chatAPI.CatchUpGroup(api.NewRequestHeader(), groupID, fromTS)
 			if err != nil {
 				return err
@@ -413,6 +432,10 @@ func messagesCmd() *cobra.Command {
 				for _, msg := range extractMessages(event) {
 					messages = append(messages, model.MessageFromProto(msg))
 				}
+			}
+
+			if limit > 0 && limit < len(messages) {
+				messages = messages[len(messages)-limit:]
 			}
 
 			if jsonOutput {
@@ -432,6 +455,9 @@ func messagesCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().IntVarP(&limit, "limit", "n", 0, "max messages to show, most recent (0 = all)")
+	cmd.Flags().StringVar(&since, "since", "", "only messages since duration ago (e.g. 24h, 168h)")
+	return cmd
 }
 
 // sendCmd sends a message to a conversation.
@@ -499,7 +525,10 @@ func whoamiCmd() *cobra.Command {
 
 // recentCmd shows all recent messages across all conversations.
 func recentCmd() *cobra.Command {
-	return &cobra.Command{
+	var limit int
+	var since string
+
+	cmd := &cobra.Command{
 		Use:   "recent",
 		Short: "Show recent messages across all conversations",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -511,14 +540,27 @@ func recentCmd() *cobra.Command {
 			client := transport.NewClient(session)
 			chatAPI := api.New(client)
 
-			fromTS := time.Now().Add(-24 * time.Hour).UnixMicro()
+			dur := 24 * time.Hour
+			if since != "" {
+				d, err := time.ParseDuration(since)
+				if err != nil {
+					return fmt.Errorf("invalid --since duration: %w", err)
+				}
+				dur = d
+			}
+
+			fromTS := time.Now().Add(-dur).UnixMicro()
 			resp, err := chatAPI.CatchUpUser(api.NewRequestHeader(), fromTS)
 			if err != nil {
 				return err
 			}
 
+			count := 0
 			for _, event := range resp.GetEvents() {
 				for _, msg := range extractMessages(event) {
+					if limit > 0 && count >= limit {
+						return nil
+					}
 					m := model.MessageFromProto(msg)
 					gid := model.FormatGroupID(event.GetGroupId())
 					sender := m.Sender
@@ -526,17 +568,23 @@ func recentCmd() *cobra.Command {
 						sender = m.SenderID
 					}
 					fmt.Printf("[%s] %s | %s: %s\n", m.Time.Format("15:04"), gid, sender, m.Text)
+					count++
 				}
 			}
 
 			return nil
 		},
 	}
+	cmd.Flags().IntVarP(&limit, "limit", "n", 0, "max messages to show (0 = all)")
+	cmd.Flags().StringVar(&since, "since", "24h", "how far back to look (e.g. 1h, 168h)")
+	return cmd
 }
 
 // dmsCmd lists all DM contacts with resolved names.
 func dmsCmd() *cobra.Command {
-	return &cobra.Command{
+	var limit int
+
+	cmd := &cobra.Command{
 		Use:   "dms",
 		Short: "List all DM contacts with names",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -567,6 +615,10 @@ func dmsCmd() *cobra.Command {
 			var contacts []dmContact
 
 			for _, item := range resp.GetWorldItems() {
+				if limit > 0 && len(contacts) >= limit {
+					break
+				}
+
 				gid := item.GetGroupId()
 				if gid.GetDmId() == nil {
 					continue
@@ -616,6 +668,8 @@ func dmsCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().IntVarP(&limit, "limit", "n", 0, "max contacts to show (0 = all)")
+	return cmd
 }
 
 // watchCmd streams real-time events from the webchannel.
