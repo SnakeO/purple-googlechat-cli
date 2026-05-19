@@ -1,0 +1,23 @@
+# Binaries
+bin/
+/gchat
+*.exe
+
+# Credentials — never commit
+credentials.json
+*.cookie
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+coverage.out
+*.test
