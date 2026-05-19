@@ -15,6 +15,7 @@ import (
 
 	"github.com/jacobchapa/gchat/internal/api"
 	"github.com/jacobchapa/gchat/internal/auth"
+	"github.com/jacobchapa/gchat/internal/channel"
 	"github.com/jacobchapa/gchat/internal/config"
 	"github.com/jacobchapa/gchat/internal/model"
 	pb "github.com/jacobchapa/gchat/internal/proto"
@@ -45,6 +46,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(whoamiCmd())
 	root.AddCommand(recentCmd())
 	root.AddCommand(dmsCmd())
+	root.AddCommand(watchCmd())
 
 	return root
 }
@@ -612,6 +614,50 @@ func dmsCmd() *cobra.Command {
 			}
 
 			return nil
+		},
+	}
+}
+
+// watchCmd streams real-time events from the webchannel.
+func watchCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "watch",
+		Short: "Stream real-time messages",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			session, err := loadSession()
+			if err != nil {
+				return err
+			}
+
+			fmt.Println("Connecting to webchannel...")
+
+			conn := channel.NewConnection(session, func(evt channel.Event) {
+				if evt.Proto == nil {
+					return
+				}
+
+				event := evt.Proto.GetEvent()
+				if event == nil {
+					return
+				}
+
+				for _, msg := range extractMessages(event) {
+					m := model.MessageFromProto(msg)
+					gid := model.FormatGroupID(event.GetGroupId())
+					sender := m.Sender
+					if sender == "" {
+						sender = m.SenderID
+					}
+					if jsonOutput {
+						data, _ := json.Marshal(m)
+						fmt.Println(string(data))
+					} else {
+						fmt.Printf("[%s] %s | %s: %s\n", m.Time.Format("15:04"), gid, sender, m.Text)
+					}
+				}
+			})
+
+			return conn.Connect()
 		},
 	}
 }
