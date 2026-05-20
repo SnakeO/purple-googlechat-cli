@@ -18,6 +18,28 @@ func Dir() (string, error) {
 	return filepath.Join(home, ".config", "gchat"), nil
 }
 
+// CachePath returns the path to the SQLite cache database.
+func CachePath() (string, error) {
+	dir, err := EnsureDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "cache.db"), nil
+}
+
+// ModelsDir returns the path to the models directory, creating it if needed.
+func ModelsDir() (string, error) {
+	dir, err := EnsureDir()
+	if err != nil {
+		return "", err
+	}
+	modelsDir := filepath.Join(dir, "models")
+	if err := os.MkdirAll(modelsDir, 0700); err != nil {
+		return "", fmt.Errorf("config: cannot create models directory: %w", err)
+	}
+	return modelsDir, nil
+}
+
 // EnsureDir creates the config directory if it doesn't exist.
 func EnsureDir() (string, error) {
 	dir, err := Dir()

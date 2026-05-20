@@ -13,17 +13,27 @@ import (
 	"strings"
 	"time"
 
+	"context"
+
 	"github.com/jacobchapa/gchat/internal/api"
 	"github.com/jacobchapa/gchat/internal/auth"
+	"github.com/jacobchapa/gchat/internal/cache"
 	"github.com/jacobchapa/gchat/internal/channel"
 	"github.com/jacobchapa/gchat/internal/config"
+	"github.com/jacobchapa/gchat/internal/embed"
 	"github.com/jacobchapa/gchat/internal/model"
 	pb "github.com/jacobchapa/gchat/internal/proto"
 	"github.com/jacobchapa/gchat/internal/transport"
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
-var jsonOutput bool
+// Global state initialized at startup.
+var (
+	jsonOutput bool
+	db         *cache.Cache
+	embedder   *embed.Embedder
+)
 
 func main() {
 	if err := rootCmd().Execute(); err != nil {
@@ -36,6 +46,24 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "gchat",
 		Short: "Google Chat CLI for personal accounts",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Skip init for auth commands — they don't need cache/embedder
+			if cmd.Parent() != nil && cmd.Parent().Name() == "auth" {
+				return nil
+			}
+			if cmd.Name() == "auth" {
+				return nil
+			}
+			return initCacheAndEmbedder()
+		},
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			if embedder != nil {
+				embedder.Close()
+			}
+			if db != nil {
+				db.Close()
+			}
+		},
 	}
 	root.PersistentFlags().BoolVar(&jsonOutput, "json", false, "output as JSON")
 
@@ -47,8 +75,86 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(recentCmd())
 	root.AddCommand(dmsCmd())
 	root.AddCommand(watchCmd())
+	root.AddCommand(searchCmd())
+	root.AddCommand(cacheCmd())
+	root.AddCommand(loadCmd())
 
 	return root
+}
+
+// initCacheAndEmbedder sets up the SQLite cache and embedding model.
+func initCacheAndEmbedder() error {
+	dbPath, err := config.CachePath()
+	if err != nil {
+		return err
+	}
+
+	db, err = cache.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cache unavailable: %v\n", err)
+		db = nil
+	}
+
+	ctx := context.Background()
+	embedder, err = embed.New(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: embedder unavailable: %v\n", err)
+		embedder = nil
+	}
+
+	return nil
+}
+
+// cacheMessage upserts a message into the cache and generates its embedding.
+// Silently logs errors to stderr — never interrupts the command.
+func cacheMessage(convID, msgID, senderID, text string, createdAt int64, isDeleted bool) {
+	if db == nil {
+		return
+	}
+	if err := db.UpsertMessage(convID, msgID, senderID, text, createdAt, isDeleted); err != nil {
+		fmt.Fprintf(os.Stderr, "cache: message upsert: %v\n", err)
+		return
+	}
+
+	if embedder == nil || text == "" || isDeleted {
+		return
+	}
+
+	rowID, err := db.MessageRowID(convID, msgID)
+	if err != nil {
+		return
+	}
+
+	vec, err := embedder.Embed(context.Background(), text)
+	if err != nil {
+		return
+	}
+
+	db.UpsertMessageEmbedding(rowID, vec)
+}
+
+// cacheUser upserts a user into the cache.
+func cacheUser(gaiaID, name, email string) {
+	if db == nil || gaiaID == "" {
+		return
+	}
+	db.UpsertUser(gaiaID, name, email)
+}
+
+// cacheConversation upserts a conversation into the cache.
+func cacheConversation(id, name string, isDM bool, lastMsg string, lastTime int64) {
+	if db == nil {
+		return
+	}
+	db.UpsertConversation(id, name, isDM, lastMsg, lastTime)
+}
+
+// cacheMembership upserts a membership into the cache.
+func cacheMembership(convID, userID string) {
+	if db == nil || convID == "" || userID == "" {
+		return
+	}
+	db.UpsertMembership(convID, userID)
 }
 
 // --- Auth Commands ---
@@ -356,7 +462,9 @@ func conversationsCmd() *cobra.Command {
 
 			convos := make([]model.Conversation, 0, len(resp.GetWorldItems()))
 			for _, item := range resp.GetWorldItems() {
-				convos = append(convos, model.ConversationFromWorldItem(item))
+				c := model.ConversationFromWorldItem(item)
+				convos = append(convos, c)
+				cacheConversation(model.FormatGroupID(item.GetGroupId()), c.Name, c.IsDM, c.LastMsg, c.LastTime.UnixMicro())
 			}
 
 			if limit > 0 && limit < len(convos) {
@@ -415,11 +523,11 @@ func messagesCmd() *cobra.Command {
 
 			fromTS := int64(0)
 			if since != "" {
-				dur, err := time.ParseDuration(since)
+				sinceTime, err := model.ParseSince(since)
 				if err != nil {
-					return fmt.Errorf("invalid --since duration (e.g. 24h, 7d): %w", err)
+					return err
 				}
-				fromTS = time.Now().Add(-dur).UnixMicro()
+				fromTS = sinceTime.UnixMicro()
 			}
 
 			resp, err := chatAPI.CatchUpGroup(api.NewRequestHeader(), groupID, fromTS)
@@ -427,10 +535,14 @@ func messagesCmd() *cobra.Command {
 				return err
 			}
 
+			convID := args[0]
 			var messages []model.Message
 			for _, event := range resp.GetEvents() {
 				for _, msg := range extractMessages(event) {
-					messages = append(messages, model.MessageFromProto(msg))
+					m := model.MessageFromProto(msg)
+					messages = append(messages, m)
+					cacheMessage(convID, m.ID, m.SenderID, m.Text, m.Time.UnixMicro(), m.IsDeleted)
+					cacheUser(m.SenderID, m.Sender, "")
 				}
 			}
 
@@ -733,6 +845,303 @@ func extractMessages(event *pb.Event) []*pb.Message {
 	}
 
 	return msgs
+}
+
+// --- Search Command ---
+
+// searchCmd performs semantic or keyword search across cached messages.
+func searchCmd() *cobra.Command {
+	var keyword bool
+	var limit int
+	var since string
+
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search cached messages",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if db == nil {
+				return fmt.Errorf("cache not available")
+			}
+
+			sinceUsec := int64(0)
+			if since != "" {
+				t, err := model.ParseSince(since)
+				if err != nil {
+					return err
+				}
+				sinceUsec = t.UnixMicro()
+			}
+
+			if limit <= 0 {
+				limit = 20
+			}
+
+			var results []cache.SearchResult
+			var err error
+
+			if keyword {
+				results, err = db.KeywordSearch(args[0], limit, sinceUsec)
+			} else {
+				if embedder == nil {
+					return fmt.Errorf("embedder not available — cannot do semantic search. Use --keyword for text search.")
+				}
+				vec, embErr := embedder.Embed(context.Background(), args[0])
+				if embErr != nil {
+					return fmt.Errorf("embedding failed: %w", embErr)
+				}
+				results, err = db.SemanticSearch(vec, limit, sinceUsec)
+			}
+
+			if err != nil {
+				return err
+			}
+
+			if len(results) == 0 {
+				fmt.Println("No results. Run 'gchat --load-data-since 168h' to populate the cache first.")
+				return nil
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(results)
+			}
+
+			for _, r := range results {
+				ts := time.UnixMicro(r.CreatedAt).Format("2006-01-02 15:04")
+				sender := r.SenderName
+				if sender == "" {
+					sender = r.SenderID
+				}
+				fmt.Printf("[%s] %s | %s: %s\n", ts, r.ConversationID, sender, r.Text)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&keyword, "keyword", false, "use keyword (FTS5) search instead of semantic")
+	cmd.Flags().IntVarP(&limit, "limit", "n", 20, "max results")
+	cmd.Flags().StringVar(&since, "since", "", "only search messages since (e.g. 168h, 2024-01-15)")
+	return cmd
+}
+
+// --- Cache Management ---
+
+// cacheCmd provides cache inspection and management.
+func cacheCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cache",
+		Short: "Manage local cache",
+	}
+	cmd.AddCommand(cacheStatsCmd())
+	cmd.AddCommand(cacheClearCmd())
+	return cmd
+}
+
+// cacheStatsCmd shows cache statistics.
+func cacheStatsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stats",
+		Short: "Show cache statistics",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if db == nil {
+				return fmt.Errorf("cache not available")
+			}
+
+			stats, err := db.GetStats()
+			if err != nil {
+				return err
+			}
+
+			dbPath, _ := config.CachePath()
+			info, _ := os.Stat(dbPath)
+			dbSize := "unknown"
+			if info != nil {
+				dbSize = fmt.Sprintf("%.1f MB", float64(info.Size())/1024/1024)
+			}
+
+			fmt.Printf("Cache: %s (%s)\n", dbPath, dbSize)
+			fmt.Printf("  Conversations: %d\n", stats.Conversations)
+			fmt.Printf("  Messages:      %d\n", stats.Messages)
+			fmt.Printf("  Users:         %d\n", stats.Users)
+			fmt.Printf("  Memberships:   %d\n", stats.Memberships)
+			fmt.Printf("  Embeddings:    %d\n", stats.Embeddings)
+			fmt.Printf("  Model:         %v\n", embed.ModelExists())
+			return nil
+		},
+	}
+}
+
+// cacheClearCmd wipes the cache.
+func cacheClearCmd() *cobra.Command {
+	var clearModels bool
+
+	cmd := &cobra.Command{
+		Use:   "clear",
+		Short: "Clear cached data",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if db != nil {
+				if err := db.ClearAll(); err != nil {
+					return err
+				}
+				fmt.Println("Cache cleared.")
+			}
+
+			if clearModels {
+				modelsDir, err := config.ModelsDir()
+				if err == nil {
+					os.RemoveAll(modelsDir)
+					fmt.Println("Models deleted.")
+				}
+			}
+
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&clearModels, "models", false, "also delete downloaded models")
+	return cmd
+}
+
+// --- Load Data ---
+
+// loadCmd creates the `gchat load` command.
+func loadCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "load <since>",
+		Short: "Load and cache data since a time (e.g. 168h, 720h, 2024-01-15)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runLoadDataSince(args[0])
+		},
+	}
+}
+
+// runLoadDataSince fetches all conversations, messages, and members since the given time.
+// Fetches all conversations, messages, and members since the given time.
+func runLoadDataSince(sinceStr string) error {
+	sinceTime, err := model.ParseSince(sinceStr)
+	if err != nil {
+		return err
+	}
+	fromTS := sinceTime.UnixMicro()
+
+	session, err := loadSession()
+	if err != nil {
+		return err
+	}
+
+	client := transport.NewClient(session)
+	chatAPI := api.New(client)
+
+	// Step 1: Fetch conversations
+	fmt.Fprintf(os.Stderr, "[1/4] Fetching conversations...\n")
+	resp, err := chatAPI.PaginatedWorld(api.NewRequestHeader())
+	if err != nil {
+		return fmt.Errorf("load: conversations: %w", err)
+	}
+
+	convos := resp.GetWorldItems()
+	for _, item := range convos {
+		c := model.ConversationFromWorldItem(item)
+		cacheConversation(model.FormatGroupID(item.GetGroupId()), c.Name, c.IsDM, c.LastMsg, c.LastTime.UnixMicro())
+	}
+	fmt.Fprintf(os.Stderr, "  %d conversations cached\n", len(convos))
+
+	// Step 2: Fetch messages for each conversation
+	fmt.Fprintf(os.Stderr, "[2/4] Fetching messages...\n")
+	bar := progressbar.NewOptions(len(convos),
+		progressbar.OptionSetDescription("  Messages"),
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionShowCount(),
+		progressbar.OptionClearOnFinish(),
+	)
+
+	totalMsgs := 0
+	for _, item := range convos {
+		gid := item.GetGroupId()
+		convID := model.FormatGroupID(gid)
+
+		catchResp, err := chatAPI.CatchUpGroup(api.NewRequestHeader(), gid, fromTS)
+		if err != nil {
+			bar.Add(1)
+			continue
+		}
+
+		for _, event := range catchResp.GetEvents() {
+			for _, msg := range extractMessages(event) {
+				m := model.MessageFromProto(msg)
+				cacheMessage(convID, m.ID, m.SenderID, m.Text, m.Time.UnixMicro(), m.IsDeleted)
+				cacheUser(m.SenderID, m.Sender, "")
+				totalMsgs++
+			}
+		}
+		bar.Add(1)
+	}
+	bar.Finish()
+	fmt.Fprintf(os.Stderr, "  %d messages cached\n", totalMsgs)
+
+	// Step 3: Fetch members
+	fmt.Fprintf(os.Stderr, "[3/4] Fetching members...\n")
+	bar = progressbar.NewOptions(len(convos),
+		progressbar.OptionSetDescription("  Members"),
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionShowCount(),
+		progressbar.OptionClearOnFinish(),
+	)
+
+	selfResp, _ := chatAPI.GetSelfUserStatus(api.NewRequestHeader())
+	selfID := ""
+	if selfResp != nil {
+		selfID = selfResp.GetUserStatus().GetUserId().GetId()
+		if db != nil {
+			db.SetMeta("self_gaia_id", selfID)
+		}
+	}
+
+	totalUsers := 0
+	for _, item := range convos {
+		gid := item.GetGroupId()
+		convID := model.FormatGroupID(gid)
+
+		members, err := chatAPI.ListMembers(api.NewRequestHeader(), gid)
+		if err != nil {
+			bar.Add(1)
+			continue
+		}
+
+		for _, ms := range members.GetMemberships() {
+			mid := ms.GetId().GetMemberId()
+			uid := mid.GetUserId().GetId()
+			if uid == "" {
+				continue
+			}
+			cacheMembership(convID, uid)
+
+			memberResp, err := chatAPI.GetMembers(api.NewRequestHeader(), []*pb.MemberId{mid})
+			if err == nil {
+				for _, m := range memberResp.GetMembers() {
+					if u := m.GetUser(); u != nil {
+						cacheUser(u.GetUserId().GetId(), u.GetName(), u.GetEmail())
+						totalUsers++
+					}
+				}
+			}
+		}
+		bar.Add(1)
+	}
+	bar.Finish()
+	fmt.Fprintf(os.Stderr, "  %d users cached\n", totalUsers)
+
+	// Step 4: Summary
+	if db != nil {
+		stats, _ := db.GetStats()
+		if stats != nil {
+			fmt.Fprintf(os.Stderr, "[4/4] Done! Cache: %d conversations, %d messages, %d users, %d embeddings\n",
+				stats.Conversations, stats.Messages, stats.Users, stats.Embeddings)
+		}
+	}
+
+	return nil
 }
 
 // openBrowser tries to open a URL in the default browser.
