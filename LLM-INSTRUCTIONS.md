@@ -37,9 +37,28 @@ gchat recent --since 1h -n 10           # Last hour, max 10
 
 gchat watch                             # Stream real-time incoming messages
 
+# --- Cache, Search, and Bulk Loading ---
+
+gchat load 168h                         # Load + cache last 7 days (all entities)
+gchat load 720h                         # Load last 30 days
+gchat load 2024-01-15                   # Load since specific date
+gchat load 2024-01-15T00:00:00Z         # Load since RFC3339 datetime
+
+gchat search "deadline tomorrow"        # Semantic vector search (uses embeddings)
+gchat search "hello" --keyword          # FTS5 keyword search (exact text match)
+gchat search "budget" -n 10             # Limit results
+gchat search "update" --since 720h      # Only search last 30 days
+gchat search "query" --since 2025-01-01 # Since specific date
+gchat search "query" --json             # JSON output
+
+gchat cache stats                       # Show row counts, DB size, model status
+gchat cache clear                       # Wipe cached data (keeps model)
+gchat cache clear --models              # Also delete downloaded embedding model
+
 # All commands support --json for structured output
 gchat conversations --json
 gchat messages dm:<id> --json | jq '.'
+gchat search "query" --json | jq '.'
 ```
 
 ## Conversation ID format
@@ -180,6 +199,43 @@ Sender names come from the message's `creator` field. Some older messages or sys
 - The conversation may have no recent messages. Try `--since` with a longer duration or omit it to fetch all history.
 - Some very old conversations have been archived server-side and return no events.
 
+## Local cache and search
+
+gchat caches all fetched data in a local SQLite database at `~/.config/gchat/cache.db`. Every API response automatically upserts into the cache.
+
+### How caching works
+- All commands that fetch data (conversations, messages, dms, recent, watch) automatically write results to the cache
+- Messages are automatically embedded using nomic-embed-text v1.5 (768-dim vectors)
+- The embedding model (~138MB) is downloaded from HuggingFace on first use to `~/.config/gchat/models/`
+- Embeddings run locally using Hugot's pure Go backend -- no API keys, no internet needed after model download
+
+### Cached entities
+- **conversations**: ID, name, type (DM/Space), last message preview
+- **messages**: conversation ID, message ID, sender, text, timestamp, deleted flag
+- **users**: Gaia ID, name, email
+- **memberships**: which users are in which conversations
+- **vec_messages**: 768-dim float32 embeddings for semantic search (sqlite-vec)
+
+### Search types
+- **Semantic search** (default): Embeds the query, finds similar messages by vector distance. Good for finding related content even with different wording.
+- **Keyword search** (`--keyword`): FTS5 full-text search. Exact text matching. No embedding model needed.
+
+### --since format (used by load, search, messages, recent)
+Accepts three formats:
+- Go duration: `168h`, `720h`, `8760h`
+- Date: `2024-01-15` (midnight UTC)
+- RFC3339: `2024-01-15T10:30:00Z`
+
+### Typical workflow for a new user
+```bash
+gchat auth login --browser                # authenticate
+gchat load 720h                           # cache last 30 days (takes ~1 min)
+gchat search "project update"             # semantic search
+gchat search "exact phrase" --keyword     # keyword search
+gchat conversations                       # browse conversations
+gchat messages dm:ID -n 20               # read recent messages
+```
+
 ## Protocol details (for advanced LLM use)
 
 gchat uses the Google Chat Dynamite protocol:
@@ -200,16 +256,22 @@ Key API endpoints:
 
 Pblite format: protobuf messages encoded as JSON arrays where array index = field number. Google prefixes responses with `)]}'\n` (XSS protection) and wraps pblite data in `[["dfe.method.name", [actual_data]]]`.
 
-## Credentials location
+## File locations
 
-`~/.config/gchat/credentials.json` -- contains cookies and XSRF token. File permissions are 0600. This file should never be committed to git or shared.
+| File | Path |
+|------|------|
+| Credentials | `~/.config/gchat/credentials.json` (0600 perms) |
+| Cache database | `~/.config/gchat/cache.db` (SQLite + sqlite-vec) |
+| Embedding model | `~/.config/gchat/models/nomic-ai_nomic-embed-text-v1.5/` (~138MB) |
+
+None of these should be committed to git or shared.
 
 ## Building from source
 
 ```bash
-git clone <repo>
-cd gchat
-CGO_ENABLED=1 go build -o bin/gchat ./cmd/gchat
+git clone https://github.com/SnakeO/purple-googlechat-cli.git
+cd purple-googlechat-cli
+make build
 ```
 
-CGO is required for the `go-sqlite3` driver used to read Chrome's cookie database. The binary is architecture-specific (arm64 or amd64) but can be copied between Macs of the same architecture.
+CGO is required for `go-sqlite3`, FTS5, and `sqlite-vec`. The binary is architecture-specific (arm64 or amd64) but can be copied between Macs of the same architecture.
