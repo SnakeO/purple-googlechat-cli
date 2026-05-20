@@ -44,6 +44,9 @@ gchat auth login --browser
 # Load and cache the last 30 days of data (downloads embedding model on first run)
 gchat load 720h
 
+# Next time, just sync new data since last import
+gchat load --sync
+
 # Search your messages semantically
 gchat search "meeting tomorrow"
 
@@ -119,9 +122,12 @@ gchat load 720h                     # Load last 30 days
 gchat load 8760h                    # Load last year
 gchat load 2024-01-15               # Load since a specific date
 gchat load 2024-01-15T00:00:00Z     # Load since RFC3339 datetime
+gchat load --sync                   # Incremental: load since last import
 ```
 
 Fetches all conversations, messages, and member info since the given time. Caches everything in SQLite and automatically generates vector embeddings for semantic search. Shows progress bars during loading.
+
+Use `--sync` for incremental updates after the initial load — it remembers the last import time automatically.
 
 ### Search
 
@@ -135,6 +141,17 @@ gchat search "query" --json                      # JSON output
 ```
 
 Semantic search uses nomic-embed-text v1.5 embeddings + sqlite-vec for vector similarity. Results are ranked by relevance. Keyword search uses SQLite FTS5 for exact text matching.
+
+### Mentions
+
+```bash
+gchat mentions                       # all @mentions of you from others
+gchat mentions -n 10                 # limit to 10
+gchat mentions --since 720h          # last 30 days only
+gchat mentions --json                # JSON output
+```
+
+Shows messages from other people that @mention you. Requires cached data — run `gchat load` first.
 
 ### List conversations
 

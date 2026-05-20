@@ -43,6 +43,7 @@ gchat load 168h                         # Load + cache last 7 days (all entities
 gchat load 720h                         # Load last 30 days
 gchat load 2024-01-15                   # Load since specific date
 gchat load 2024-01-15T00:00:00Z         # Load since RFC3339 datetime
+gchat load --sync                       # Incremental: load since last import
 
 gchat search "deadline tomorrow"        # Semantic vector search (uses embeddings)
 gchat search "hello" --keyword          # FTS5 keyword search (exact text match)
@@ -50,6 +51,10 @@ gchat search "budget" -n 10             # Limit results
 gchat search "update" --since 720h      # Only search last 30 days
 gchat search "query" --since 2025-01-01 # Since specific date
 gchat search "query" --json             # JSON output
+
+gchat mentions                          # Messages where you were @mentioned
+gchat mentions -n 10                    # Limit results
+gchat mentions --since 720h             # Only last 30 days
 
 gchat cache stats                       # Show row counts, DB size, model status
 gchat cache clear                       # Wipe cached data (keeps model)
@@ -232,8 +237,16 @@ gchat auth login --browser                # authenticate
 gchat load 720h                           # cache last 30 days (takes ~1 min)
 gchat search "project update"             # semantic search
 gchat search "exact phrase" --keyword     # keyword search
+gchat mentions                            # see who @mentioned you
 gchat conversations                       # browse conversations
 gchat messages dm:ID -n 20               # read recent messages
+```
+
+### Subsequent sessions (incremental sync)
+```bash
+gchat load --sync                         # fetch only new data since last import
+gchat search "new topic"                  # search includes fresh data
+gchat mentions --since 168h               # recent mentions
 ```
 
 ## Protocol details (for advanced LLM use)
