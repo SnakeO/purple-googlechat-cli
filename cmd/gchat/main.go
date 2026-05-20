@@ -78,6 +78,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(searchCmd())
 	root.AddCommand(cacheCmd())
 	root.AddCommand(loadCmd())
+	root.AddCommand(mentionsCmd())
 
 	return root
 }
@@ -1006,14 +1007,42 @@ func cacheClearCmd() *cobra.Command {
 
 // loadCmd creates the `gchat load` command.
 func loadCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "load <since>",
-		Short: "Load and cache data since a time (e.g. 168h, 720h, 2024-01-15)",
-		Args:  cobra.ExactArgs(1),
+	var sync bool
+
+	cmd := &cobra.Command{
+		Use:   "load [since]",
+		Short: "Load and cache data since a time (e.g. 168h, 720h, 2024-01-15) or --sync for incremental",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if sync {
+				return runLoadSync()
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("provide a time (e.g. '168h', '2024-01-15') or use --sync")
+			}
 			return runLoadDataSince(args[0])
 		},
 	}
+	cmd.Flags().BoolVar(&sync, "sync", false, "load new data since last import")
+	return cmd
+}
+
+// runLoadSync loads data since the last successful import.
+func runLoadSync() error {
+	if db == nil {
+		return fmt.Errorf("cache not available")
+	}
+
+	lastLoad, err := db.GetMeta("last_load_time")
+	if err != nil {
+		return err
+	}
+	if lastLoad == "" {
+		return fmt.Errorf("no previous load found — run 'gchat load 720h' first to do an initial import")
+	}
+
+	fmt.Fprintf(os.Stderr, "Syncing since last import (%s)...\n", lastLoad)
+	return runLoadDataSince(lastLoad)
 }
 
 // runLoadDataSince fetches all conversations, messages, and members since the given time.
@@ -1132,8 +1161,10 @@ func runLoadDataSince(sinceStr string) error {
 	bar.Finish()
 	fmt.Fprintf(os.Stderr, "  %d users cached\n", totalUsers)
 
-	// Step 4: Summary
+	// Step 4: Record load time and print summary
 	if db != nil {
+		db.SetMeta("last_load_time", time.Now().UTC().Format(time.RFC3339))
+
 		stats, _ := db.GetStats()
 		if stats != nil {
 			fmt.Fprintf(os.Stderr, "[4/4] Done! Cache: %d conversations, %d messages, %d users, %d embeddings\n",
@@ -1142,6 +1173,86 @@ func runLoadDataSince(sinceStr string) error {
 	}
 
 	return nil
+}
+
+// --- Mentions Command ---
+
+// mentionsCmd shows messages where the authenticated user was @mentioned.
+func mentionsCmd() *cobra.Command {
+	var limit int
+	var since string
+
+	cmd := &cobra.Command{
+		Use:   "mentions",
+		Short: "Show messages where you were @mentioned",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if db == nil {
+				return fmt.Errorf("cache not available — run 'gchat load 720h' first")
+			}
+
+			selfID := ""
+			if val, _ := db.GetMeta("self_gaia_id"); val != "" {
+				selfID = val
+			} else {
+				session, err := loadSession()
+				if err != nil {
+					return err
+				}
+				client := transport.NewClient(session)
+				chatAPI := api.New(client)
+				resp, _ := chatAPI.GetSelfUserStatus(api.NewRequestHeader())
+				if resp != nil {
+					selfID = resp.GetUserStatus().GetUserId().GetId()
+					db.SetMeta("self_gaia_id", selfID)
+				}
+			}
+			if selfID == "" {
+				return fmt.Errorf("cannot determine your user ID")
+			}
+
+			sinceUsec := int64(0)
+			if since != "" {
+				t, err := model.ParseSince(since)
+				if err != nil {
+					return err
+				}
+				sinceUsec = t.UnixMicro()
+			}
+
+			if limit <= 0 {
+				limit = 50
+			}
+
+			results, err := db.SearchMentions(selfID, limit, sinceUsec)
+			if err != nil {
+				return err
+			}
+
+			if len(results) == 0 {
+				fmt.Println("No @mentions found in cache. Run 'gchat load 720h' to populate.")
+				return nil
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(results)
+			}
+
+			for _, r := range results {
+				ts := time.UnixMicro(r.CreatedAt).Format("2006-01-02 15:04")
+				sender := r.SenderName
+				if sender == "" {
+					sender = r.SenderID
+				}
+				fmt.Printf("[%s] %s | %s: %s\n", ts, r.ConversationID, sender, r.Text)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().IntVarP(&limit, "limit", "n", 50, "max results")
+	cmd.Flags().StringVar(&since, "since", "", "only mentions since (e.g. 168h, 2024-01-15)")
+	return cmd
 }
 
 // openBrowser tries to open a URL in the default browser.

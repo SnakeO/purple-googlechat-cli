@@ -123,6 +123,72 @@ func scanSearchResults(rows *sql.Rows) ([]SearchResult, error) {
 	return results, rows.Err()
 }
 
+// SearchMentions finds messages that @mention the given user.
+// Looks for messages containing "@" where the sender is not the user themselves.
+// Also matches messages from other users that contain the user's cached display name.
+func (c *Cache) SearchMentions(selfGaiaID string, limit int, sinceUsec int64) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	// Get self user's name to search for @mentions
+	selfName := ""
+	u, _ := c.GetUser(selfGaiaID)
+	if u != nil && u.Name != "" {
+		selfName = u.Name
+	}
+
+	query := `
+		SELECT m.conversation_id, m.message_id, m.sender_id,
+			COALESCE(u.name, ''), m.text, m.created_at, 0.0
+		FROM messages m
+		LEFT JOIN users u ON m.sender_id = u.gaia_id
+		WHERE m.is_deleted = 0
+			AND m.sender_id != ?
+			AND m.text LIKE '%@%'`
+	args := []interface{}{selfGaiaID}
+
+	if sinceUsec > 0 {
+		query += " AND m.created_at >= ?"
+		args = append(args, sinceUsec)
+	}
+
+	query += " ORDER BY m.created_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("cache: mentions search failed: %w", err)
+	}
+	defer rows.Close()
+
+	results, err := scanSearchResults(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// If we have the user's name, also filter for messages containing it
+	if selfName != "" && len(results) == 0 {
+		query2 := `
+			SELECT m.conversation_id, m.message_id, m.sender_id,
+				COALESCE(u.name, ''), m.text, m.created_at, 0.0
+			FROM messages m
+			LEFT JOIN users u ON m.sender_id = u.gaia_id
+			WHERE m.is_deleted = 0
+				AND m.sender_id != ?
+				AND m.text LIKE ?
+			ORDER BY m.created_at DESC LIMIT ?`
+		rows2, err := c.db.Query(query2, selfGaiaID, "%@"+selfName+"%", limit)
+		if err != nil {
+			return results, nil
+		}
+		defer rows2.Close()
+		return scanSearchResults(rows2)
+	}
+
+	return results, nil
+}
+
 // Stats returns row counts for each cached entity type.
 type CacheStats struct {
 	Conversations int
