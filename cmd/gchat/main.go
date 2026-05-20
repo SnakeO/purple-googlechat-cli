@@ -1027,22 +1027,21 @@ func loadCmd() *cobra.Command {
 	return cmd
 }
 
-// runLoadSync loads data since the last successful import.
+// runLoadSync loads data since the most recent cached message.
 func runLoadSync() error {
 	if db == nil {
 		return fmt.Errorf("cache not available")
 	}
 
-	lastLoad, err := db.GetMeta("last_load_time")
-	if err != nil {
-		return err
-	}
-	if lastLoad == "" {
-		return fmt.Errorf("no previous load found — run 'gchat load 720h' first to do an initial import")
+	var maxCreatedAt int64
+	err := db.DB().QueryRow("SELECT COALESCE(MAX(created_at), 0) FROM messages").Scan(&maxCreatedAt)
+	if err != nil || maxCreatedAt == 0 {
+		return fmt.Errorf("no cached messages found — run 'gchat load 720h' first to do an initial import")
 	}
 
-	fmt.Fprintf(os.Stderr, "Syncing since last import (%s)...\n", lastLoad)
-	return runLoadDataSince(lastLoad)
+	sinceTime := time.UnixMicro(maxCreatedAt).UTC().Format(time.RFC3339)
+	fmt.Fprintf(os.Stderr, "Syncing since newest cached message (%s)...\n", sinceTime)
+	return runLoadDataSince(sinceTime)
 }
 
 // runLoadDataSince fetches all conversations, messages, and members since the given time.
