@@ -547,6 +547,21 @@ func messagesCmd() *cobra.Command {
 				}
 			}
 
+			// Threaded Spaces: if catch_up_group returned no messages, try list_topics
+			if len(messages) == 0 {
+				topicsResp, err := chatAPI.ListTopics(api.NewRequestHeader(), groupID)
+				if err == nil && len(topicsResp.GetTopics()) > 0 {
+					for _, topic := range topicsResp.GetTopics() {
+						for _, reply := range topic.GetReplies() {
+							m := model.MessageFromProto(reply)
+							messages = append(messages, m)
+							cacheMessage(convID, m.ID, m.SenderID, m.Text, m.Time.UnixMicro(), m.IsDeleted)
+							cacheUser(m.SenderID, m.Sender, "")
+						}
+					}
+				}
+			}
+
 			if limit > 0 && limit < len(messages) {
 				messages = messages[len(messages)-limit:]
 			}
@@ -1089,20 +1104,36 @@ func runLoadDataSince(sinceStr string) error {
 		gid := item.GetGroupId()
 		convID := model.FormatGroupID(gid)
 
+		// Try catch_up_group first (works for DMs and flat Spaces)
+		msgCount := 0
 		catchResp, err := chatAPI.CatchUpGroup(api.NewRequestHeader(), gid, fromTS)
-		if err != nil {
-			bar.Add(1)
-			continue
-		}
-
-		for _, event := range catchResp.GetEvents() {
-			for _, msg := range extractMessages(event) {
-				m := model.MessageFromProto(msg)
-				cacheMessage(convID, m.ID, m.SenderID, m.Text, m.Time.UnixMicro(), m.IsDeleted)
-				cacheUser(m.SenderID, m.Sender, "")
-				totalMsgs++
+		if err == nil {
+			for _, event := range catchResp.GetEvents() {
+				for _, msg := range extractMessages(event) {
+					m := model.MessageFromProto(msg)
+					cacheMessage(convID, m.ID, m.SenderID, m.Text, m.Time.UnixMicro(), m.IsDeleted)
+					cacheUser(m.SenderID, m.Sender, "")
+					msgCount++
+				}
 			}
 		}
+
+		// Threaded Spaces: if no messages from catch_up, try list_topics
+		if msgCount == 0 {
+			topicsResp, topErr := chatAPI.ListTopics(api.NewRequestHeader(), gid)
+			if topErr == nil {
+				for _, topic := range topicsResp.GetTopics() {
+					for _, reply := range topic.GetReplies() {
+						m := model.MessageFromProto(reply)
+						cacheMessage(convID, m.ID, m.SenderID, m.Text, m.Time.UnixMicro(), m.IsDeleted)
+						cacheUser(m.SenderID, m.Sender, "")
+						msgCount++
+					}
+				}
+			}
+		}
+
+		totalMsgs += msgCount
 		bar.Add(1)
 	}
 	bar.Finish()

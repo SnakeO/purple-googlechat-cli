@@ -140,6 +140,24 @@ func (a *ChatAPI) ListMembers(reqHeader *pb.RequestHeader, groupID *pb.GroupId) 
 	return resp, nil
 }
 
+// ListTopics fetches topics (threads) in a threaded Space, including replies.
+func (a *ChatAPI) ListTopics(reqHeader *pb.RequestHeader, groupID *pb.GroupId) (*pb.ListTopicsResponse, error) {
+	topicPageSize := int32(100)
+	replyPageSize := int32(500)
+	req := &pb.ListTopicsRequest{
+		RequestHeader:      reqHeader,
+		GroupId:            groupID,
+		PageSizeForTopics:  &topicPageSize,
+		PageSizeForReplies: &replyPageSize,
+	}
+	resp := &pb.ListTopicsResponse{}
+
+	if err := a.client.APIRequest("/api/list_topics", req, resp); err != nil {
+		return nil, fmt.Errorf("api: list_topics: %w", err)
+	}
+	return resp, nil
+}
+
 // NewRequestHeader creates a standard request header for API calls.
 func NewRequestHeader() *pb.RequestHeader {
 	clientType := pb.RequestHeader_IOS
