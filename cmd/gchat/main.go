@@ -83,7 +83,7 @@ func rootCmd() *cobra.Command {
 	return root
 }
 
-// initCacheAndEmbedder sets up the SQLite cache and embedding model.
+// initCacheAndEmbedder sets up the SQLite cache. Embedder is loaded lazily on first use.
 func initCacheAndEmbedder() error {
 	dbPath, err := config.CachePath()
 	if err != nil {
@@ -96,42 +96,102 @@ func initCacheAndEmbedder() error {
 		db = nil
 	}
 
-	ctx := context.Background()
-	embedder, err = embed.New(ctx)
+	return nil
+}
+
+// getEmbedder returns the embedder, initializing it lazily on first call.
+func getEmbedder() *embed.Embedder {
+	if embedder != nil {
+		return embedder
+	}
+	var err error
+	embedder, err = embed.New(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: embedder unavailable: %v\n", err)
 		embedder = nil
 	}
-
-	return nil
+	return embedder
 }
 
-// cacheMessage upserts a message into the cache and generates its embedding.
-// Silently logs errors to stderr — never interrupts the command.
+// cacheMessage upserts a message into the cache (text only, no embedding).
+// Embeddings are generated during `load` (batch) and `search` (query).
 func cacheMessage(convID, msgID, senderID, text string, createdAt int64, isDeleted bool) {
 	if db == nil {
 		return
 	}
 	if err := db.UpsertMessage(convID, msgID, senderID, text, createdAt, isDeleted); err != nil {
 		fmt.Fprintf(os.Stderr, "cache: message upsert: %v\n", err)
+	}
+}
+
+// embedCachedMessages generates embeddings for all unembedded messages in the cache.
+func embedCachedMessages() {
+	if db == nil {
 		return
 	}
 
-	if embedder == nil || text == "" || isDeleted {
+	e := getEmbedder()
+	if e == nil {
 		return
 	}
 
-	rowID, err := db.MessageRowID(convID, msgID)
+	rows, err := db.DB().Query(`
+		SELECT m.rowid, m.text FROM messages m
+		LEFT JOIN vec_messages v ON m.rowid = v.rowid
+		WHERE v.rowid IS NULL AND m.text != '' AND m.is_deleted = 0`)
 	if err != nil {
 		return
 	}
+	defer rows.Close()
 
-	vec, err := embedder.Embed(context.Background(), text)
-	if err != nil {
+	type pending struct {
+		rowid int64
+		text  string
+	}
+	var items []pending
+	for rows.Next() {
+		var p pending
+		rows.Scan(&p.rowid, &p.text)
+		items = append(items, p)
+	}
+
+	if len(items) == 0 {
 		return
 	}
 
-	db.UpsertMessageEmbedding(rowID, vec)
+	fmt.Fprintf(os.Stderr, "Embedding %d messages...\n", len(items))
+	bar := progressbar.NewOptions(len(items),
+		progressbar.OptionSetDescription("  Embed"),
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionShowCount(),
+		progressbar.OptionClearOnFinish(),
+	)
+
+	batchSize := 32
+	for i := 0; i < len(items); i += batchSize {
+		end := i + batchSize
+		if end > len(items) {
+			end = len(items)
+		}
+		batch := items[i:end]
+
+		texts := make([]string, len(batch))
+		for j, p := range batch {
+			texts[j] = p.text
+		}
+
+		vecs, err := e.EmbedBatch(context.Background(), texts)
+		if err != nil {
+			bar.Add(len(batch))
+			continue
+		}
+
+		for j, vec := range vecs {
+			db.UpsertMessageEmbedding(batch[j].rowid, vec)
+		}
+		bar.Add(len(batch))
+	}
+	bar.Finish()
 }
 
 // cacheUser upserts a user into the cache.
@@ -899,10 +959,11 @@ func searchCmd() *cobra.Command {
 			if keyword {
 				results, err = db.KeywordSearch(args[0], limit, sinceUsec)
 			} else {
-				if embedder == nil {
+				e := getEmbedder()
+				if e == nil {
 					return fmt.Errorf("embedder not available — cannot do semantic search. Use --keyword for text search.")
 				}
-				vec, embErr := embedder.Embed(context.Background(), args[0])
+				vec, embErr := e.Embed(context.Background(), args[0])
 				if embErr != nil {
 					return fmt.Errorf("embedding failed: %w", embErr)
 				}
@@ -1191,13 +1252,17 @@ func runLoadDataSince(sinceStr string) error {
 	bar.Finish()
 	fmt.Fprintf(os.Stderr, "  %d users cached\n", totalUsers)
 
-	// Step 4: Record load time and print summary
+	// Step 4: Embed new messages
+	fmt.Fprintf(os.Stderr, "[4/5] Embedding new messages...\n")
+	embedCachedMessages()
+
+	// Step 5: Record load time and print summary
 	if db != nil {
 		db.SetMeta("last_load_time", time.Now().UTC().Format(time.RFC3339))
 
 		stats, _ := db.GetStats()
 		if stats != nil {
-			fmt.Fprintf(os.Stderr, "[4/4] Done! Cache: %d conversations, %d messages, %d users, %d embeddings\n",
+			fmt.Fprintf(os.Stderr, "[5/5] Done! Cache: %d conversations, %d messages, %d users, %d embeddings\n",
 				stats.Conversations, stats.Messages, stats.Users, stats.Embeddings)
 		}
 	}

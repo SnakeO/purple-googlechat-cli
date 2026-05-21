@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jacobchapa/gchat/internal/auth"
 	"github.com/jacobchapa/gchat/internal/pblite"
@@ -24,7 +25,7 @@ type Client struct {
 // NewClient creates a new authenticated transport client.
 func NewClient(session auth.Session) *Client {
 	return &Client{
-		HTTP:    &http.Client{},
+		HTTP:    &http.Client{Timeout: 15 * time.Second},
 		Session: session,
 	}
 }

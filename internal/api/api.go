@@ -32,25 +32,52 @@ func (a *ChatAPI) GetSelfUserStatus(reqHeader *pb.RequestHeader) (*pb.GetSelfUse
 	return resp, nil
 }
 
-// PaginatedWorld fetches the conversation list.
+// PaginatedWorld fetches the full conversation list, following pagination tokens.
 func (a *ChatAPI) PaginatedWorld(reqHeader *pb.RequestHeader) (*pb.PaginatedWorldResponse, error) {
-	pageSize := int32(999)
+	pageSize := int32(200)
 	fetchSpaces := true
 	fetchSnippets := true
-	req := &pb.PaginatedWorldRequest{
-		RequestHeader:               reqHeader,
-		FetchFromUserSpaces:         &fetchSpaces,
-		FetchSnippetsForUnnamedRooms: &fetchSnippets,
-		WorldSectionRequests: []*pb.WorldSectionRequest{
-			{PageSize: &pageSize},
-		},
-	}
-	resp := &pb.PaginatedWorldResponse{}
 
-	if err := a.client.APIRequest("/api/paginated_world", req, resp); err != nil {
-		return nil, fmt.Errorf("api: paginated_world: %w", err)
+	combined := &pb.PaginatedWorldResponse{}
+	var paginationToken *string
+
+	for {
+		sectionReq := &pb.WorldSectionRequest{PageSize: &pageSize}
+		if paginationToken != nil {
+			sectionReq.PaginationToken = paginationToken
+		}
+
+		req := &pb.PaginatedWorldRequest{
+			RequestHeader:                reqHeader,
+			FetchFromUserSpaces:          &fetchSpaces,
+			FetchSnippetsForUnnamedRooms: &fetchSnippets,
+			WorldSectionRequests:         []*pb.WorldSectionRequest{sectionReq},
+		}
+		resp := &pb.PaginatedWorldResponse{}
+
+		if err := a.client.APIRequest("/api/paginated_world", req, resp); err != nil {
+			return nil, fmt.Errorf("api: paginated_world: %w", err)
+		}
+
+		combined.WorldItems = append(combined.WorldItems, resp.GetWorldItems()...)
+
+		// Check if any section response has more pages
+		hasMore := false
+		for _, section := range resp.GetWorldSectionResponses() {
+			if section.GetHasMoreItems() && section.GetPaginationToken() != "" {
+				token := section.GetPaginationToken()
+				paginationToken = &token
+				hasMore = true
+				break
+			}
+		}
+
+		if !hasMore {
+			break
+		}
 	}
-	return resp, nil
+
+	return combined, nil
 }
 
 // CatchUpGroup fetches message history for a conversation.
@@ -140,10 +167,10 @@ func (a *ChatAPI) ListMembers(reqHeader *pb.RequestHeader, groupID *pb.GroupId) 
 	return resp, nil
 }
 
-// ListTopics fetches topics (threads) in a threaded Space, including replies.
+// ListTopics fetches recent topics (threads) in a threaded Space, including replies.
 func (a *ChatAPI) ListTopics(reqHeader *pb.RequestHeader, groupID *pb.GroupId) (*pb.ListTopicsResponse, error) {
-	topicPageSize := int32(100)
-	replyPageSize := int32(500)
+	topicPageSize := int32(20)
+	replyPageSize := int32(10)
 	req := &pb.ListTopicsRequest{
 		RequestHeader:      reqHeader,
 		GroupId:            groupID,
