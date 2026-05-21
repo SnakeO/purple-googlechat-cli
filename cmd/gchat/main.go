@@ -587,16 +587,32 @@ func conversationsCmd() *cobra.Command {
 				return enc.Encode(convos)
 			}
 
+			// Resolve self ID for unnamed group chat labeling
+			selfID := ""
+			if db != nil {
+				selfID, _ = db.GetMeta("self_gaia_id")
+			}
+
 			for _, c := range convos {
 				typeStr := "Space"
 				if c.IsDM {
 					typeStr = "DM"
 				}
+
+				// Resolve unnamed conversations and DMs from cached members
+				displayName := c.Name
+				if (displayName == c.ID || displayName == "DM") && db != nil && selfID != "" {
+					convKey := model.FormatGroupID(c.GroupID)
+					if resolved := db.ResolveConversationName(convKey, selfID); resolved != "" {
+						displayName = resolved
+					}
+				}
+
 				lastTime := ""
 				if !c.LastTime.IsZero() {
 					lastTime = c.LastTime.Format(time.RFC3339)
 				}
-				fmt.Printf("[%s] %-5s %-30s %s\n", c.ID, typeStr, c.Name, lastTime)
+				fmt.Printf("[%s] %-5s %-30s %s\n", c.ID, typeStr, displayName, lastTime)
 				if c.LastMsg != "" {
 					fmt.Printf("  > %s\n", c.LastMsg)
 				}

@@ -30,6 +30,41 @@ func (c *Cache) UpsertConversation(id, name string, isDM bool, lastMsg string, l
 	return err
 }
 
+// ResolveConversationName builds a display name for unnamed group chats
+// by joining member names from the cache, excluding selfID.
+func (c *Cache) ResolveConversationName(convID, selfID string) string {
+	rows, err := c.db.Query(`
+		SELECT u.name FROM memberships m
+		JOIN users u ON m.user_id = u.gaia_id
+		WHERE m.conversation_id = ? AND m.user_id != ? AND u.name != ''
+		ORDER BY u.name
+		LIMIT 5`, convID, selfID)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		rows.Scan(&name)
+		names = append(names, name)
+	}
+
+	if len(names) == 0 {
+		return ""
+	}
+
+	result := ""
+	for i, n := range names {
+		if i > 0 {
+			result += ", "
+		}
+		result += n
+	}
+	return result
+}
+
 // ListConversations returns cached conversations ordered by last activity.
 // Pass limit=0 for no limit.
 func (c *Cache) ListConversations(limit int) ([]CachedConversation, error) {
