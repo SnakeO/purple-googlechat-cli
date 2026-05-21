@@ -59,9 +59,10 @@ type Credentials struct {
 	Method string `json:"method"` // "cookie" or "oauth"
 
 	// Cookie auth fields
-	Cookies map[string]string `json:"cookies,omitempty"`
-	XSRF    string            `json:"xsrf,omitempty"`
-	SAPISID string            `json:"sapisid,omitempty"`
+	Cookies      map[string]string `json:"cookies,omitempty"`
+	XSRF         string            `json:"xsrf,omitempty"`
+	SAPISID      string            `json:"sapisid,omitempty"`
+	ChromeProfile string           `json:"chrome_profile,omitempty"`
 
 	// OAuth auth fields
 	RefreshToken    string `json:"refresh_token,omitempty"`

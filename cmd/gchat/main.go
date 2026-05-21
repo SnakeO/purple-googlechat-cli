@@ -408,9 +408,10 @@ func loginBrowser(profile string) error {
 	}
 
 	creds := &config.Credentials{
-		Method:  "cookie",
-		Cookies: cookies,
-		XSRF:    session.XSRF(),
+		Method:        "cookie",
+		Cookies:       cookies,
+		XSRF:          session.XSRF(),
+		ChromeProfile: profile,
 	}
 
 	if err := config.SaveCredentials(creds); err != nil {
@@ -473,6 +474,15 @@ func loadSession() (auth.Session, error) {
 
 	switch creds.Method {
 	case "cookie":
+		// Auto-refresh from Chrome if profile is known
+		if creds.ChromeProfile != "" {
+			session, err := refreshFromChrome(creds)
+			if err == nil {
+				return session, nil
+			}
+			fmt.Fprintf(os.Stderr, "Auto-refresh failed, using saved cookies: %v\n", err)
+		}
+
 		session, err := auth.NewCookieSession(creds.Cookies)
 		if err != nil {
 			return nil, err
@@ -498,6 +508,45 @@ func loadSession() (auth.Session, error) {
 	default:
 		return nil, fmt.Errorf("unknown auth method: %s", creds.Method)
 	}
+}
+
+// refreshFromChrome extracts fresh cookies from Chrome and bootstraps XSRF.
+func refreshFromChrome(creds *config.Credentials) (auth.Session, error) {
+	profiles, err := auth.FindChromeProfiles()
+	if err != nil {
+		return nil, err
+	}
+
+	var chromeDir string
+	for _, p := range profiles {
+		if p.Name == creds.ChromeProfile {
+			chromeDir = p.Path
+			break
+		}
+	}
+	if chromeDir == "" {
+		return nil, fmt.Errorf("Chrome profile %q not found", creds.ChromeProfile)
+	}
+
+	cookies, err := auth.ExtractChromeGoogleCookies(chromeDir)
+	if err != nil {
+		return nil, err
+	}
+
+	session, err := auth.NewCookieSession(cookies)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := session.BootstrapXSRF(&http.Client{}); err != nil {
+		return nil, err
+	}
+
+	creds.Cookies = cookies
+	creds.XSRF = session.XSRF()
+	config.SaveCredentials(creds)
+
+	return session, nil
 }
 
 // conversationsCmd lists conversations.
