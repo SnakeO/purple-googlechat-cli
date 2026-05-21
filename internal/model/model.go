@@ -124,6 +124,15 @@ func microsToTime(micros int64) time.Time {
 	return time.Unix(micros/1_000_000, (micros%1_000_000)*1000)
 }
 
+// FirstLine returns the first line of a string, adding "..." if there are more lines.
+func FirstLine(s string) string {
+	idx := strings.Index(s, "\n")
+	if idx == -1 {
+		return s
+	}
+	return s[:idx] + " ..."
+}
+
 // truncate shortens a string to maxLen.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {

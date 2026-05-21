@@ -820,7 +820,7 @@ func recentCmd() *cobra.Command {
 					if sender == "" {
 						sender = m.SenderID
 					}
-					fmt.Printf("[%s] %s | %s: %s\n", m.Time.Format("15:04"), gid, sender, m.Text)
+					fmt.Printf("[%s] %s | %s: %s\n", m.Time.Format("15:04"), gid, sender, model.FirstLine(m.Text))
 					count++
 				}
 			}
@@ -959,7 +959,7 @@ func watchCmd() *cobra.Command {
 						data, _ := json.Marshal(m)
 						fmt.Println(string(data))
 					} else {
-						fmt.Printf("[%s] %s | %s: %s\n", m.Time.Format("15:04"), gid, sender, m.Text)
+						fmt.Printf("[%s] %s | %s: %s\n", m.Time.Format("15:04"), gid, sender, model.FirstLine(m.Text))
 					}
 				}
 			})
@@ -1056,7 +1056,7 @@ func searchCmd() *cobra.Command {
 				if sender == "" {
 					sender = r.SenderID
 				}
-				fmt.Printf("[%s] %s | %s: %s\n", ts, r.ConversationID, sender, r.Text)
+				fmt.Printf("[%s] %s | %s: %s\n", ts, r.ConversationID, sender, model.FirstLine(r.Text))
 			}
 			return nil
 		},
@@ -1411,7 +1411,7 @@ func mentionsCmd() *cobra.Command {
 				if sender == "" {
 					sender = r.SenderID
 				}
-				fmt.Printf("[%s] %s | %s: %s\n", ts, r.ConversationID, sender, r.Text)
+				fmt.Printf("[%s] %s | %s: %s\n", ts, r.ConversationID, sender, model.FirstLine(r.Text))
 			}
 			return nil
 		},

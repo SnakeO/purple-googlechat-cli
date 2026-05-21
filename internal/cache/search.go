@@ -118,7 +118,7 @@ func (c *Cache) KeywordSearch(query string, limit int, sinceUsec int64) ([]Searc
 func containsFTS5Special(query string) bool {
 	for _, c := range query {
 		switch c {
-		case '@', '"', '*', '(', ')', '{', '}', '^', '~', ':':
+		case '@', '"', '*', '(', ')', '{', '}', '^', '~', ':', '-', '+', '!', '#':
 			return true
 		}
 	}
