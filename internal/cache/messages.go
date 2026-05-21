@@ -12,6 +12,7 @@ type CachedMessage struct {
 }
 
 // UpsertMessage inserts or updates a message in the cache.
+// Skips the update if the existing row already has identical data.
 func (c *Cache) UpsertMessage(convID, msgID, senderID, text string, createdAt int64, isDeleted bool) error {
 	_, err := c.db.Exec(`
 		INSERT INTO messages (conversation_id, message_id, sender_id, text, created_at, is_deleted, updated_at)
@@ -21,7 +22,11 @@ func (c *Cache) UpsertMessage(convID, msgID, senderID, text string, createdAt in
 			text = excluded.text,
 			created_at = excluded.created_at,
 			is_deleted = excluded.is_deleted,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at
+		WHERE sender_id != excluded.sender_id
+			OR text != excluded.text
+			OR created_at != excluded.created_at
+			OR is_deleted != excluded.is_deleted`,
 		convID, msgID, senderID, text, createdAt, isDeleted, now(),
 	)
 	return err

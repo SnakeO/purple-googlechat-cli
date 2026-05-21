@@ -6,10 +6,8 @@ import "database/sql"
 // UpsertMembership records that a user is a member of a conversation.
 func (c *Cache) UpsertMembership(convID, userID string) error {
 	_, err := c.db.Exec(`
-		INSERT INTO memberships (conversation_id, user_id, updated_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(conversation_id, user_id) DO UPDATE SET
-			updated_at = excluded.updated_at`,
+		INSERT OR IGNORE INTO memberships (conversation_id, user_id, updated_at)
+		VALUES (?, ?, ?)`,
 		convID, userID, now(),
 	)
 	return err

@@ -18,7 +18,9 @@ func (c *Cache) UpsertUser(gaiaID, name, email string) error {
 		ON CONFLICT(gaia_id) DO UPDATE SET
 			name = excluded.name,
 			email = excluded.email,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at
+		WHERE name != excluded.name
+			OR email != excluded.email`,
 		gaiaID, name, email, now(),
 	)
 	return err

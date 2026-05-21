@@ -20,7 +20,11 @@ func (c *Cache) UpsertConversation(id, name string, isDM bool, lastMsg string, l
 			is_dm = excluded.is_dm,
 			last_msg = excluded.last_msg,
 			last_time = excluded.last_time,
-			updated_at = excluded.updated_at`,
+			updated_at = excluded.updated_at
+		WHERE name != excluded.name
+			OR is_dm != excluded.is_dm
+			OR last_msg != excluded.last_msg
+			OR last_time != excluded.last_time`,
 		id, name, isDM, lastMsg, lastTime, now(),
 	)
 	return err
