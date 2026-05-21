@@ -77,9 +77,14 @@ func (c *Cache) SemanticSearch(queryEmbedding []float32, limit int, sinceUsec in
 }
 
 // KeywordSearch finds messages matching the query using FTS5.
+// Falls back to LIKE search if the query contains FTS5 special characters.
 func (c *Cache) KeywordSearch(query string, limit int, sinceUsec int64) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 20
+	}
+
+	if containsFTS5Special(query) {
+		return c.likeSearch(query, limit, sinceUsec)
 	}
 
 	q := `
@@ -103,6 +108,46 @@ func (c *Cache) KeywordSearch(query string, limit int, sinceUsec int64) ([]Searc
 	rows, err := c.db.Query(q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("cache: keyword search failed: %w", err)
+	}
+	defer rows.Close()
+
+	return scanSearchResults(rows)
+}
+
+// containsFTS5Special returns true if the query has characters that break FTS5.
+func containsFTS5Special(query string) bool {
+	for _, c := range query {
+		switch c {
+		case '@', '"', '*', '(', ')', '{', '}', '^', '~', ':':
+			return true
+		}
+	}
+	return false
+}
+
+// likeSearch falls back to SQL LIKE when the query has FTS5-incompatible characters.
+func (c *Cache) likeSearch(query string, limit int, sinceUsec int64) ([]SearchResult, error) {
+	pattern := "%" + query + "%"
+	q := `
+		SELECT m.conversation_id, m.message_id, m.sender_id,
+			COALESCE(u.name, ''), m.text, m.created_at, 0.0
+		FROM messages m
+		LEFT JOIN users u ON m.sender_id = u.gaia_id
+		WHERE m.text LIKE ?
+			AND m.is_deleted = 0`
+	args := []interface{}{pattern}
+
+	if sinceUsec > 0 {
+		q += " AND m.created_at >= ?"
+		args = append(args, sinceUsec)
+	}
+
+	q += " ORDER BY m.created_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := c.db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("cache: like search failed: %w", err)
 	}
 	defer rows.Close()
 
