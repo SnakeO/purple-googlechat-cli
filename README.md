@@ -31,7 +31,7 @@ CGO is required for SQLite, FTS5, and sqlite-vec.
 macOS Apple Silicon (M1/M2/M3/M4):
 
 ```bash
-curl -L https://github.com/SnakeO/purple-googlechat-cli/releases/latest/download/gchat-darwin-arm64 -o gchat
+curl -L https://github.com/SnakeO/purple-googlechat-cli/releases/download/v0.5.1/gchat-darwin-arm64 -o gchat
 chmod +x gchat
 ```
 
@@ -180,6 +180,17 @@ Conversation IDs use the format `dm:<id>` for direct messages and `space:<id>` f
 ```bash
 gchat send dm:ID "hello world"
 gchat send space:ID "message to the space"
+```
+
+### Download attachments
+
+Messages with file attachments show a 📎 icon with the filename and a download token:
+
+```bash
+gchat messages dm:ID -n 10
+# output: 📎 document.pdf (token: AOo0EE...)
+
+gchat download "AOo0EE..." -o ~/Downloads
 ```
 
 ### List DM contacts

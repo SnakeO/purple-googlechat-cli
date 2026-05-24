@@ -60,6 +60,12 @@ gchat cache stats                       # Show row counts, DB size, model status
 gchat cache clear                       # Wipe cached data (keeps model)
 gchat cache clear --models              # Also delete downloaded embedding model
 
+# --- Attachments ---
+
+gchat messages dm:<id> -n 10            # Shows 📎 icon with filename and token
+gchat download <token>                  # Download attachment to current directory
+gchat download <token> -o ~/Downloads   # Download to specific directory
+
 # All commands support --json for structured output
 gchat conversations --json
 gchat messages dm:<id> --json | jq '.'
@@ -240,6 +246,7 @@ gchat search "exact phrase" --keyword     # keyword search
 gchat mentions                            # see who @mentioned you
 gchat conversations                       # browse conversations
 gchat messages dm:ID -n 20               # read recent messages
+gchat download "token..."                 # download an attachment shown with 📎
 ```
 
 ### Subsequent sessions (incremental sync)
@@ -248,6 +255,17 @@ gchat load --sync                         # fetch only new data since last impor
 gchat search "new topic"                  # search includes fresh data
 gchat mentions --since 168h               # recent mentions
 ```
+
+### Downloading attachments
+Messages with file attachments display a 📎 icon with the filename and a download token:
+```
+📎 document.pdf (token: AOo0EE...)
+```
+Copy the token and run:
+```bash
+gchat download "AOo0EE..." -o ~/Downloads
+```
+The file downloads via Google's FIFE image CDN at original resolution. Requires fresh cookies (auto-refreshed from Chrome if `--browser` profile is saved).
 
 ## Protocol details (for advanced LLM use)
 
