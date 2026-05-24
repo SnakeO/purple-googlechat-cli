@@ -119,7 +119,7 @@ func decodeResponseBody(headers http.Header, body []byte) ([]byte, error) {
 // DownloadAttachment fetches an attachment by token and returns the file bytes and filename.
 // Uses a cookie jar to follow redirects with auth through Google's redirect chain.
 func (c *Client) DownloadAttachment(token string) ([]byte, string, error) {
-	dlURL := auth.APIBase + "/api/get_attachment_url?url_type=DOWNLOAD_URL&attachment_token=" + url.QueryEscape(token)
+	dlURL := auth.APIBase + "/api/get_attachment_url?url_type=FIFE_URL&attachment_token=" + url.QueryEscape(token)
 
 	req, err := http.NewRequest("GET", dlURL, nil)
 	if err != nil {
