@@ -23,12 +23,21 @@ type Conversation struct {
 
 // Message represents a single chat message.
 type Message struct {
-	ID         string
-	Sender     string
-	SenderID   string
-	Text       string
-	Time       time.Time
-	IsDeleted  bool
+	ID          string
+	Sender      string
+	SenderID    string
+	Text        string
+	Time        time.Time
+	IsDeleted   bool
+	Attachments []Attachment
+}
+
+// Attachment represents a file attached to a message.
+type Attachment struct {
+	Token       string // attachment_token for download
+	Name        string // content_name (filename)
+	ContentType string // MIME type
+	DriveID     string // cloned_drive_id if uploaded to Drive
 }
 
 // User represents the authenticated user's identity.
@@ -93,6 +102,17 @@ func MessageFromProto(msg *pb.Message) Message {
 
 	if msg.GetCreateTime() != 0 {
 		m.Time = microsToTime(msg.GetCreateTime())
+	}
+
+	for _, ann := range msg.GetAnnotations() {
+		if um := ann.GetUploadMetadata(); um != nil {
+			m.Attachments = append(m.Attachments, Attachment{
+				Token:       um.GetAttachmentToken(),
+				Name:        um.GetContentName(),
+				ContentType: um.GetContentType(),
+				DriveID:     um.GetClonedDriveId(),
+			})
+		}
 	}
 
 	return m

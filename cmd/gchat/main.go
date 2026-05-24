@@ -79,6 +79,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(cacheCmd())
 	root.AddCommand(loadCmd())
 	root.AddCommand(mentionsCmd())
+	root.AddCommand(downloadCmd())
 
 	return root
 }
@@ -704,6 +705,13 @@ func messagesCmd() *cobra.Command {
 					sender = m.SenderID
 				}
 				fmt.Printf("[%s] %s: %s\n", timeStr, sender, m.Text)
+				for _, att := range m.Attachments {
+					name := att.Name
+					if name == "" {
+						name = "file"
+					}
+					fmt.Printf("  📎 %s (token: %s)\n", name, att.Token)
+				}
 			}
 			return nil
 		},
@@ -1418,6 +1426,52 @@ func mentionsCmd() *cobra.Command {
 	}
 	cmd.Flags().IntVarP(&limit, "limit", "n", 50, "max results")
 	cmd.Flags().StringVar(&since, "since", "", "only mentions since (e.g. 168h, 2024-01-15)")
+	return cmd
+}
+
+// --- Download Command ---
+
+// downloadCmd downloads an attachment by token.
+func downloadCmd() *cobra.Command {
+	var outputDir string
+
+	cmd := &cobra.Command{
+		Use:   "download <attachment_token>",
+		Short: "Download an attachment by token",
+		Long:  "Download a file attachment. Get the token from 'gchat messages' output (shown after 📎).",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			session, err := loadSession()
+			if err != nil {
+				return err
+			}
+
+			client := transport.NewClient(session)
+
+			fmt.Fprintf(os.Stderr, "Downloading...\n")
+			data, filename, err := client.DownloadAttachment(args[0])
+			if err != nil {
+				return err
+			}
+
+			if filename == "" {
+				filename = "attachment"
+			}
+
+			outPath := filename
+			if outputDir != "" {
+				outPath = outputDir + "/" + filename
+			}
+
+			if err := os.WriteFile(outPath, data, 0644); err != nil {
+				return fmt.Errorf("cannot write file: %w", err)
+			}
+
+			fmt.Printf("Downloaded: %s (%d bytes)\n", outPath, len(data))
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&outputDir, "output", "o", "", "output directory (default: current directory)")
 	return cmd
 }
 

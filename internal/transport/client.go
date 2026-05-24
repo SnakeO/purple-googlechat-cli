@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -113,6 +114,55 @@ func decodeResponseBody(headers http.Header, body []byte) ([]byte, error) {
 		return decoded, nil
 	}
 	return body, nil
+}
+
+// DownloadAttachment fetches an attachment by token and returns the file bytes and filename.
+// Uses a cookie jar to follow redirects with auth through Google's redirect chain.
+func (c *Client) DownloadAttachment(token string) ([]byte, string, error) {
+	dlURL := auth.APIBase + "/api/get_attachment_url?url_type=DOWNLOAD_URL&attachment_token=" + url.QueryEscape(token)
+
+	req, err := http.NewRequest("GET", dlURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("transport: cannot create download request: %w", err)
+	}
+
+	if err := c.Session.SetHeaders(req); err != nil {
+		return nil, "", fmt.Errorf("transport: cannot set auth headers: %w", err)
+	}
+
+	// Follow redirects, re-injecting auth headers on each hop
+	dlClient := &http.Client{
+		Timeout: 60 * time.Second,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			c.Session.SetHeaders(r)
+			return nil
+		},
+	}
+
+	resp, err := dlClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("transport: download request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("transport: download returned status %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("transport: cannot read download response: %w", err)
+	}
+
+	filename := ""
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		if idx := strings.Index(cd, "filename="); idx >= 0 {
+			filename = strings.Trim(cd[idx+9:], "\"' ")
+		}
+	}
+
+	return body, filename, nil
 }
 
 // truncate shortens a string to maxLen characters for error messages.
